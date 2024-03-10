@@ -1,0 +1,2 @@
+Entropy: 1.0
+Error: 0.5
