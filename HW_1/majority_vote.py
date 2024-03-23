@@ -10,7 +10,8 @@ def train(d):
 
 def majority_vote(d):
     pos_count = 0
-    labels = d["heart_disease"]
+    last_col = d.columns[-1]
+    labels = d[last_col]
     for label in labels:
         pos_count = pos_count + label
     return int(pos_count >= len(labels) - pos_count)
@@ -27,6 +28,12 @@ def predict(d, out_file_name):
     for index, row in d.iterrows():
         predictions.append(h(d.iloc[index]))
         out_file.write(str(h(d.iloc[index])) + '\n')
+    return predictions
+
+def predict(d):
+    predictions = []
+    for index, row in d.iterrows():
+        predictions.append(h(d.iloc[index]))
     return predictions
 
 def error(pred, labels):
