@@ -1,0 +1,12 @@
+epoch=1 crossentropy(train): 2
+epoch=1 crossentropy(validation): 2
+epoch=2 crossentropy(train): 0
+epoch=2 crossentropy(validation): 0
+epoch=3 crossentropy(train): 0
+epoch=3 crossentropy(validation): 0
+epoch=4 crossentropy(train): 0
+epoch=4 crossentropy(validation): 0
+error(train): [1 1 1 1]
+error(validation): [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1]
