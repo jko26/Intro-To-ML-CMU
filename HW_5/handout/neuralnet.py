@@ -152,7 +152,7 @@ class SoftMaxCrossEntropy:
         """
         y_true = np.zeros_like(y_hat)
         y_true[y] = 1
-        return -np.sum(y_true*np.log(y_hat + 10.0**(-15)))
+        return -np.sum(np.multiply(y_true, np.log(y_hat)))
 
     def forward(self, z: np.ndarray, y: int) -> Tuple[np.ndarray, float]:
         """
@@ -180,7 +180,9 @@ class SoftMaxCrossEntropy:
         :param y_hat: predicted softmax probability with shape (num_classes,)
         :return: gradient with shape (num_classes,)
         """
-        return y_hat - y
+        y_true = np.zeros(10)
+        y_true[y] = 1
+        return np.negative(y_true) + y_hat
 
 
 class Sigmoid:
@@ -202,7 +204,7 @@ class Sigmoid:
         """
         # TODO: perform forward pass and save any values you may need for
         #  the backward pass
-        self.store_forward = 1/(1 + np.exp(-x))
+        self.store_forward = 1/(1 + np.exp(np.negative(x)))
         return self.store_forward
 
     def backward(self, dz: np.ndarray) -> np.ndarray:
@@ -211,8 +213,11 @@ class Sigmoid:
             sigmoid activation
         :return: partial derivative of loss with respect to input of
             sigmoid activation
+        self.store_forward is of size (output_size,)
         """
-        return dz*self.store_forward*(1-self.store_forward)
+        #return np.multiply(dz, np.multiply(self.store_forward,np.ones_like(self.store_forward)-self.store_forward))
+        return dz * (self.store_forward * (np.ones_like(self.store_forward)-self.store_forward))
+
 
 
 # This refers to a function type that takes in a tuple of 2 integers (row, col)
@@ -252,7 +257,7 @@ class Linear:
 
         #  Initialize any additional values you may need to store for the
         #  backward pass here
-        self.input = None
+        self.input = None #input is of shape (input_size + 1, )
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         """
@@ -268,12 +273,10 @@ class Linear:
         function. Inspect your expressions for backprop to see which values
         should be cached.
         """
-        print(x.shape)
         #add bias column to input
         x = np.insert(x, 0, 1) 
 
         self.input = x
-        #print(self.input)
         # TODO: perform forward pass and save any values you may need for
         #  the backward pass
         return np.matmul(self.weights, x)
@@ -293,23 +296,18 @@ class Linear:
         HINT: You may want to use some of the values you previously cached in 
         your forward() method.
         """
-
-        # dl/dz = (dl/db) @ (beta weight matrix)
-        # dl/db is derivative with respect to output
-        print("dz: " + str(dz))
-        #dl_db is the thing causing nan
-        dl_db = np.reshape(dz, (self.weights.shape[0], 1)) # self.weights.shape[0] equals K, so final dimension is (K, 1) 
-        z = np.reshape(self.input, (1, self.input.shape[0])) # final dimension is (1, D + 1)
-        self.dw = dl_db * z # broadcasts the result to shape (K, D)
-        
-        return np.matmul(dz, self.weights[:,1]) #slice on self.weights is to ignore the first bias column
+        #shape of dz is the same as shape of output: (output_size, )
+        dz_reshaped = np.reshape(dz, (dz.shape[0], 1)) #shape: (output_size, 1)
+        input = np.reshape(self.input, (1, self.input.shape[0])) #shape: (1, input_size + 1)
+        self.dw = dz_reshaped @ input # (output_size, 1) @ (1, input_size + 1) = (output_size, input_size + 1)
+        return (np.transpose(self.weights) @ dz)[1:] # (input_size + 1, output_size) @ (output_size) = (input_size + 1, )
 
     def step(self) -> None:
         """
         Apply SGD update to weights using self.dw, which should have been 
         set in NN.backward().
         """
-        self.weights = self.weights - self.lr * self.dw
+        self.weights = self.weights - self.lr*self.dw
 
 
 class NN:
@@ -352,16 +350,12 @@ class NN:
                 a valid probability distribution over the classes.
             loss: the cross_entropy loss for a given example
         """
-        #debug: x looks good 
-        #print("In nn x.shape: " + str(x.shape))
-        a = self.linear1.forward(x) #bug: linear1.forward is making the second part nan
-        #print(a)
+        a = self.linear1.forward(x)
         z = self.sigmoid.forward(a)
-        #print("In nn z.shape: " + str(z.shape))
         b = self.linear2.forward(z)
         y_hat = self.softmaxLayer._softmax(b)
         J = self.softmaxLayer._cross_entropy(y, y_hat)
-        return (J, y_hat)
+        return (y_hat, J)
 
 
     def backward(self, y: int, y_hat: np.ndarray) -> None:
@@ -383,8 +377,8 @@ class NN:
         """
         Apply SGD update to weights.
         """
-        self.linear1.step()
         self.linear2.step()
+        self.linear1.step()
 
     def compute_loss(self, X_tr: np.ndarray, y_tr: np.ndarray) -> float:
         """
@@ -397,8 +391,9 @@ class NN:
         # compute loss over the entire dataset
         #  Hint: reuse your forward function
         for (X, y) in zip(X_tr, y_tr):
-            J, y_hat = self.forward(X, y)
-            ce_sum += self.softmaxLayer._cross_entropy(y, y_hat)
+            #shape of X is (input_size, )
+            y_hat, J = self.forward(X, y)
+            ce_sum += J
         return ce_sum/((y_tr.shape[0]))
 
     def train(self, X_tr: np.ndarray, y_tr: np.ndarray,
@@ -415,25 +410,18 @@ class NN:
             train_losses: Training losses *after* each training epoch
             test_losses: Test losses *after* each training epoch
         """
-        training_ce_across_epochs = np.zeros_like(y_tr)
-        test_ce_across_epochs = np.zeros_like(y_test)
+        training_ce_across_epochs = np.zeros(n_epochs)
+        test_ce_across_epochs = np.zeros(n_epochs)
 
         #parameters already have been initialized
-        for epoch in range(1, 2): #just do one epoch for now
+        for epoch in range(1, n_epochs + 1): 
             D = shuffle(X_tr, y_tr, epoch) 
             for (x, y) in zip(D[0], D[1]): 
-                J, y_hat = self.forward(x, y)
-                if np.isnan(y_hat).any():
-                    print("first appearance of nan in y")
-                    print("x:" + str(x))
-                    print("J: " + str(J))
+                y_hat, J = self.forward(x, y)
                 self.backward(y, y_hat) #dJ/da and dJ/db get stored in the Linear() classes
                 self.step() #update parameters
-                #somewhere in this loop, the weights are becoming nan (probably because dw becomes nan)
-            training_mean_ce = self.compute_loss(X_tr, y_tr)
-            training_ce_across_epochs[epoch - 1] = training_mean_ce
-            test_mean_ce = self.compute_loss(X_test, y_test)
-            test_ce_across_epochs[epoch - 1] = test_mean_ce
+            training_ce_across_epochs[epoch - 1] = self.compute_loss(X_tr, y_tr)
+            test_ce_across_epochs[epoch - 1] = self.compute_loss(X_test, y_test)
         return training_ce_across_epochs, test_ce_across_epochs
 
     def test(self, X_dataset: np.ndarray, y_dataset: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -447,18 +435,14 @@ class NN:
         """
         #iterate through the X and y datasets
         predictions = np.zeros_like(y_dataset)
-        error_rates = np.zeros_like(y_dataset)
+        errors = 0.0
         index = 0
         for (X, y) in zip(X_dataset, y_dataset):
-            J, y_hat = self.forward(X, y)
-            error_rate = compute_error(y_hat, y)
+            y_hat, J = self.forward(X, y)
             predictions[index] = np.argmax(y_hat)
-            error_rates[index] = error_rate
+            errors += int(np.argmax(y_hat) != y)
             index += 1 
-        return predictions, error_rates
-
-def compute_error(y_pred : np.ndarray, y : np.ndarray) -> float:
-    return 1 - (np.sum(y_pred == y)/len(y_pred))
+        return predictions, errors/len(predictions)
         
 
 
@@ -484,13 +468,6 @@ if __name__ == "__main__":
         weight_init_fn=zero_init if init_flag == 2 else random_init,
         learning_rate=lr
     )
-
-    '''
-    X_tr = X_tr[0:4] #load in a toy dataset
-    print(X_tr.shape)
-    y_tr = y_tr[0:4]
-    print(y_tr.shape)
-    '''
      
     # train model
     # (this line of code is already written for you)
@@ -511,13 +488,15 @@ if __name__ == "__main__":
         for label in test_labels:
             f.write(str(label) + "\n")
     with open(out_metrics, "w") as f:
-        for i in range(len(train_losses)):
+        for i in range(max(len(train_losses), len(test_losses))):
             cur_epoch = i + 1
-            cur_tr_loss = train_losses[i]
-            cur_te_loss = test_losses[i]
-            f.write("epoch={} crossentropy(train): {}\n".format(
-                cur_epoch, cur_tr_loss))
-            f.write("epoch={} crossentropy(validation): {}\n".format(
-                cur_epoch, cur_te_loss))
+            if (i < len(train_losses)):
+                cur_tr_loss = train_losses[i]
+                f.write("epoch={} crossentropy(train): {}\n".format(
+                    cur_epoch, cur_tr_loss))
+            if (i < len(test_losses)):
+                cur_te_loss = test_losses[i]
+                f.write("epoch={} crossentropy(validation): {}\n".format(
+                    cur_epoch, cur_te_loss))
         f.write("error(train): {}\n".format(train_error_rate))
         f.write("error(validation): {}\n".format(test_error_rate))
