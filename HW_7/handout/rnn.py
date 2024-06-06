@@ -9,12 +9,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from metrics import evaluate
 from tqdm import tqdm
+import math
 
 # Initialize the device type based on compute resources being used
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # DO NOT CHANGE THIS LINE OF CODE!!!!
 torch.manual_seed(4)
 
+word_to_idx = {}
+tag_to_idx = {}
+idx_to_tag = {}
 
 class TextDataset(Dataset):
     def __init__(self, train_input: str, word_to_idx: dict, tag_to_idx: dict, idx_to_tag: dict):
@@ -40,14 +44,33 @@ class TextDataset(Dataset):
         # word/label indices to the accumulated dataset
 
         with open(train_input, 'r') as f:
-            raise NotImplementedError
-
-        
+            sequences = f.read().split("\n \n")[:-1] #slice is to remove last element, which is an empty string due to behavior of split()
+            for sequence in sequences:
+                encoded_words = []
+                encoded_tags = []
+                for word_tag_pair in sequence.split("\n "): #word_tag_pair is in the form '<Word0>\t<Tag0>'
+                    word, tag = word_tag_pair.split("\t")
+                    if word in word_to_idx: 
+                        encoded_words.append(word_to_idx[word])
+                    else:
+                        word_to_idx[word] = i
+                        encoded_words.append(i)
+                        i += 1
+                    if tag in tag_to_idx: 
+                        encoded_tags.append(tag_to_idx[tag])
+                    else:
+                        tag_to_idx[tag] = j
+                        idx_to_tag[j] = tag
+                        encoded_tags.append(j)
+                        j += 1
+                self.sequences.append(encoded_words)
+                self.labels.append(encoded_tags)
+                    
     def __len__(self):
         """
         :return: Length of the text dataset (# of sentences)
         """
-        raise NotImplementedError
+        return len(self.sequences)
 
     def __getitem__(self, idx):
         """
@@ -57,7 +80,9 @@ class TextDataset(Dataset):
         :return word_tensor: sequence of words as a tensor
         :return label_tensor: sequence of labels as a tensor
         """
-        raise NotImplementedError
+        word_tensor = torch.tensor(self.sequences[idx])
+        label_tensor = torch.tensor(self.labels[idx])
+        return word_tensor, label_tensor
 
 
 class LinearFunction(Function):
@@ -85,11 +110,11 @@ class LinearFunction(Function):
         using the cached parameters from forward computation
 
         :param ctx: context object to access stored parameters
-        :param grad_output: partial derviative w.r.t Linear outputs (What is the shape?)
+        :param grad_output: partial derviative w.r.t Linear outputs (What is the shape?) - shape is (batch_size, out_features)
         :returns:
-            g_input: partial derivative w.r.t Linear inputs (Same shape as inputs)
-            g_weight: partial derivative w.r.t Linear weights (Same shape as weights)
-            g_bias: partial derivative w.r.t Linear bias (Same shape as bias, remember that bias is 1-D!!!)
+            g_input: partial derivative w.r.t Linear inputs (Same shape as inputs) - shape is (batch_size, in_features)
+            g_weight: partial derivative w.r.t Linear weights (Same shape as weights) - shape is (out_features, in_features)
+            g_bias: partial derivative w.r.t Linear bias (Same shape as bias, remember that bias is 1-D!!!): shape (out_features)
         """
         input, weight = ctx.saved_tensors
         g_input = torch.matmul(grad_output, weight)
@@ -106,10 +131,13 @@ class TanhFunction(Function):
         Take the Tanh of input parameter
 
         :param ctx: context object to store parameters
-        :param input: Activiation input (output of previous layers)
-        :return: output of tanh activation of shape identical to input
+        :param input: Activiation input (output of previous layers): (batch_size, in_features)
+        :return: output of tanh activation of shape identical to input (batch_size, in_features)
         """
-        raise NotImplementedError
+        output = (pow(math.e, 2*input) - 1)/(pow(math.e, 2*input) + 1)
+        ctx.save_for_backward(output)
+        return (pow(math.e, 2*input) - 1)/(pow(math.e, 2*input) + 1)
+
     
     @staticmethod
     def backward(ctx, grad_output):
@@ -117,10 +145,11 @@ class TanhFunction(Function):
         Performs backward computation of Tanh activation
 
         :param ctx: context object to access stored parameters
-        :param grad_output: partial deriviative of loss w.r.t Tanh outputs
-        :return: partial deriviative of loss w.r.t Tanh inputs
+        :param grad_output: partial deriviative of loss w.r.t Tanh outputs: shape (batch_size, in_features)
+        :return: partial deriviative of loss w.r.t Tanh inputs: shape (batch_size, in_features)
         """
-        raise NotImplementedError
+        output, = ctx.saved_tensors
+        return torch.mul(grad_output, (1 - torch.mul(output,output)))
 
 
 class ReLUFunction(Function):
@@ -133,7 +162,10 @@ class ReLUFunction(Function):
         :param input: Activation input (output of previous layers) 
         :return: Output of ReLU activation with shape identical to input
         """
-        raise NotImplementedError
+        ctx.save_for_backward(input)
+        output = input.clone().detach()
+        output[input < 0] = 0
+        return output
     
     @staticmethod
     def backward(ctx, grad_output):
@@ -144,7 +176,11 @@ class ReLUFunction(Function):
         :param grad_output: partial deriviative of loss w.r.t ReLU output
         :return: partial deriviative of loss w.r.t ReLU input
         """
-        raise NotImplementedError
+        input, = ctx.saved_tensors
+        g_input = torch.ones_like(input)
+        g_input[input < 0] = 0 #g_input contains ones for positive values of input and zeros for negative values
+        return torch.mul(grad_output, g_input)
+
 
 
 class Linear(nn.Module):
@@ -189,7 +225,7 @@ class Tanh(nn.Module):
         :param x: Input into the Tanh activation layer
         :return: Output of the Tanh activation layer
         """
-        raise NotImplementedError
+        return TanhFunction.apply(x)
 
 
 class ReLU(nn.Module):
@@ -203,7 +239,20 @@ class ReLU(nn.Module):
         :param x: Input into the ReLU activation layer
         :return: Output of the ReLU activation layer
         """
-        raise NotImplementedError
+        return ReLUFunction.apply(x)
+    
+def checkgrad():
+    #batch_size = 3, in_features = 5, out_features = 2
+    input = torch.randn((3, 5), dtype=torch.double, requires_grad=True)
+    weight = torch.randn((2, 5), dtype=torch.double, requires_grad=True)
+    bias = torch.randn(2, dtype=torch.double, requires_grad=True)
+    print(torch.autograd.gradcheck(LinearFunction.apply, (input, weight, bias)))
+
+    input = torch.randn((3, 5), dtype=torch.double, requires_grad=True)
+    print(torch.autograd.gradcheck(TanhFunction.apply, (input)))
+
+    input = torch.randn((3, 5), dtype=torch.double, requires_grad=True)
+    print(torch.autograd.gradcheck(ReLUFunction.apply, (input)))
 
 
 class RNN(nn.Module):
@@ -360,7 +409,6 @@ def main(train_input: str, test_input: str, embedding_dim: int,
         train_predictions: final predicted labels from the train dataset
         test_predictions: final predicted labels from the test dataset
     """
-    raise NotImplementedError
 
 
 if __name__ == '__main__':
@@ -378,6 +426,8 @@ if __name__ == '__main__':
     parser.add_argument('test_out', type=str, help='path to .txt file to write testing predictions to')
     parser.add_argument('metrics_out', type=str, help='path to .txt file to write metrics to')
         
+    checkgrad()
+    '''
     args = parser.parse_args()
     # Call the main function
     train_losses, train_accuracies, train_f1s, test_losses, test_accuracies, test_f1s, train_predictions, test_predictions = main(
@@ -402,3 +452,4 @@ if __name__ == '__main__':
         f.write('accuracy(test): ' + str(round(test_acc_out, 6)) + '\n')
         f.write('f1(train): ' + str(round(train_f1_out, 6)) + '\n')
         f.write('f1(test): ' + str(round(test_f1_out, 6)))
+    '''
