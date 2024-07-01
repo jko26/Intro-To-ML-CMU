@@ -16,10 +16,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # DO NOT CHANGE THIS LINE OF CODE!!!!
 torch.manual_seed(4)
 
-word_to_idx = {}
-tag_to_idx = {}
-idx_to_tag = {}
-
 class TextDataset(Dataset):
     def __init__(self, train_input: str, word_to_idx: dict, tag_to_idx: dict, idx_to_tag: dict):
         """
@@ -254,7 +250,6 @@ def checkgrad():
     input = torch.randn((3, 5), dtype=torch.double, requires_grad=True)
     print(torch.autograd.gradcheck(ReLUFunction.apply, (input)))
 
-
 class RNN(nn.Module):
     def __init__(self, embedding_dim: int, hidden_dim: int, activation: str):
         """
@@ -266,7 +261,13 @@ class RNN(nn.Module):
         :param activation: string of the activation type to use (Tanh, ReLU)
         """
         super(RNN, self).__init__()
-        raise NotImplementedError
+        self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
+        self.linear1 = Linear(embedding_dim + hidden_dim, hidden_dim)
+        if (activation == 'tanh'):
+            self.activationLayer = Tanh()
+        else:
+            self.activationLayer = ReLU()
     
     def forward(self, embeds):
         """
@@ -278,8 +279,16 @@ class RNN(nn.Module):
             outputs: list containing the final hidden states at each sequence length step. Each element has size (batch_size, hidden_dim),
             and has length equal to the sequence length
         """
+        hidden_states = []
+        hidden = torch.zeros(self.hidden_dim)
         (batch_size, seq_length, _) = embeds.shape
-        raise NotImplementedError 
+        for batch in range(batch_size):
+            for word in range(seq_length):
+                embedding = embeds[batch][word] #shape of embedding is (embedding_dim,)
+                combined = torch.cat((embedding, hidden), dim=1) #concatenate input embeddings and hidden
+                hidden = self.activationLayer(self.linear1(combined))
+                hidden_states.append(hidden)
+        return hidden
 
 
 class TaggingModel(nn.Module):
@@ -297,7 +306,9 @@ class TaggingModel(nn.Module):
         """
 
         super(TaggingModel, self).__init__()
-        raise NotImplementedError
+        self.embeddingLayer = nn.Embedding(vocab_size, embedding_dim)
+        self.rnnLayer = RNN(embedding_dim, hidden_dim, activation)
+        self.linear2 = Linear(hidden_dim, tagset_size)
     
     def forward(self, sentences):
         """
@@ -306,7 +317,15 @@ class TaggingModel(nn.Module):
         :param sentences: batched string sentences of shape (batch_size, seq_length) to be converted to embeddings 
         :return tag_distribution: concatenated results from the hidden to out layers (batch_size, seq_len, tagset_size)
         """
-        raise NotImplementedError
+        tag_distributions = []
+        (batch_size, seq_length) = sentences.shape
+        for batch in range(batch_size):
+            embedded_sentence = self.embeddingLayer(sentences[batch])
+            hidden_states = self.rnnLayer(embedded_sentence)
+            tag_distribution = self.linear2(hidden_states)
+            tag_distributions.append(tag_distribution)
+        return tag_distributions
+
     
 
 def calc_metrics(true_list, pred_list, tags_dict):
@@ -338,7 +357,13 @@ def train_one_epoch(model, dataloader, loss_fn, optimizer):
     :param loss_fn: loss function to call based on predicted tags (tag_dist) and true label (tags)
     :param optimizer: optimizer to call after loss calculated
     """
-    raise NotImplementedError
+    for data in iter(dataloader):
+        inputs, labels = data
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = loss_fn(outputs, labels)
+        loss.backward()
+        optimizer.step()
     
 
 def predict_and_evaluate(model, dataloader, tags_dict, loss_fn):
@@ -355,10 +380,28 @@ def predict_and_evaluate(model, dataloader, tags_dict, loss_fn):
         f1_score: float of the overall f1 score of the dataset
         all_preds: list of all predicted tag indices
     """
-
+    avg_loss = 0
+    avg_f1 = 0
+    num_correct = 0
+    dataset_len = 0
+    all_preds = []
     with torch.no_grad():
-        raise NotImplementedError
-
+        for data in iter(dataloader):
+            dataset_len += 1
+            inputs, labels = data
+            outputs = model(inputs)
+            for i in range(len(outputs)):
+                all_preds.append(outputs[i])
+                if (outputs[i] == labels[i]):
+                    num_correct += 1
+            loss = loss_fn(outputs, labels)
+            avg_loss += loss
+            (precision, recall, f1) = calc_metrics(labels, outputs, tags_dict)
+            avg_f1 += f1
+    if (dataset_len != 0):
+        avg_loss /= dataset_len
+        num_correct /= dataset_len
+    return (avg_loss, num_correct, avg_f1, all_preds)
 
 def train(train_dataloader, test_dataloader, model, optimizer, loss_fn, 
             tags_dict, num_epochs: int):
@@ -383,8 +426,31 @@ def train(train_dataloader, test_dataloader, model, optimizer, loss_fn,
         final_train_preds: list of tags (final train predictions on last epoch)
         final_test_preds: list of tags (final test predictions on last epoch)
     """
-    raise NotImplementedError
+    train_losses = []
+    train_accuracies = []
+    train_f1s = []
+    final_train_preds = []
+    test_losses = []
+    test_accuracies = []
+    test_f1s = []
+    final_test_preds = []
+    for epoch in range(num_epochs):
+        model.train(True) #set model to train mode 
+        train_one_epoch(model, train_dataloader, loss_fn, optimizer)
 
+        (loss, accuracy, f1_score, all_preds) = predict_and_evaluate(model, train_dataloader, tags_dict, loss_fn)
+        train_losses.append(loss)
+        train_accuracies.append(accuracy)
+        train_f1s.append(f1_score)
+        if (epoch == num_epochs - 1):
+            final_train_preds = all_preds
+        (test_loss, test_accuracy, test_f1_score, test_all_preds) = predict_and_evaluate(model, test_dataloader, tags_dict, loss_fn)
+        test_losses.append(test_loss)
+        test_accuracies.append(test_accuracy)
+        test_f1s.append(test_f1_score)
+        if (epoch == num_epochs - 1):
+            final_test_preds = test_all_preds
+    return (train_losses, train_accuracies, train_f1s, test_losses, test_accuracies, test_f1s, final_train_preds, final_test_preds)
 
 def main(train_input: str, test_input: str, embedding_dim: int, 
          hidden_dim: int,  num_epochs: int, activation: str):
@@ -409,6 +475,22 @@ def main(train_input: str, test_input: str, embedding_dim: int,
         train_predictions: final predicted labels from the train dataset
         test_predictions: final predicted labels from the test dataset
     """
+    word_to_idx = {}
+    tag_to_idx = {}
+    idx_to_tag = {}
+    train_dataset = TextDataset(train_input, word_to_idx, tag_to_idx, idx_to_tag)
+    test_dataset = TextDataset(test_input, word_to_idx, tag_to_idx, idx_to_tag)
+    train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+    vocab_size = len(word_to_idx.keys())
+    tagset_size = len(tag_to_idx.keys())
+    model = TaggingModel(vocab_size, tagset_size, embedding_dim, hidden_dim, activation)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    return train(train_dataloader, test_dataloader, model, optimizer, loss_fn, idx_to_tag, num_epochs)
+
+
 
 
 if __name__ == '__main__':
@@ -426,8 +508,8 @@ if __name__ == '__main__':
     parser.add_argument('test_out', type=str, help='path to .txt file to write testing predictions to')
     parser.add_argument('metrics_out', type=str, help='path to .txt file to write metrics to')
         
-    checkgrad()
-    '''
+    #checkgrad()
+
     args = parser.parse_args()
     # Call the main function
     train_losses, train_accuracies, train_f1s, test_losses, test_accuracies, test_f1s, train_predictions, test_predictions = main(
@@ -452,4 +534,3 @@ if __name__ == '__main__':
         f.write('accuracy(test): ' + str(round(test_acc_out, 6)) + '\n')
         f.write('f1(train): ' + str(round(train_f1_out, 6)) + '\n')
         f.write('f1(test): ' + str(round(test_f1_out, 6)))
-    '''
