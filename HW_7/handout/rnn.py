@@ -10,6 +10,7 @@ import numpy as np
 from metrics import evaluate
 from tqdm import tqdm
 import math
+import pdb 
 
 # Initialize the device type based on compute resources being used
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -40,11 +41,13 @@ class TextDataset(Dataset):
         # word/label indices to the accumulated dataset
 
         with open(train_input, 'r') as f:
-            sequences = f.read().split("\n \n")[:-1] #slice is to remove last element, which is an empty string due to behavior of split()
+            sequences = f.read().split("\n\n")[:-1] #slice is to remove last element, which is an empty string due to behavior of split()
             for sequence in sequences:
+                if sequence == "-DOCSTART-\tO":
+                    continue
                 encoded_words = []
                 encoded_tags = []
-                for word_tag_pair in sequence.split("\n "): #word_tag_pair is in the form '<Word0>\t<Tag0>'
+                for word_tag_pair in sequence.split("\n"): #word_tag_pair is in the form '<Word0>\t<Tag0>'
                     word, tag = word_tag_pair.split("\t")
                     if word in word_to_idx: 
                         encoded_words.append(word_to_idx[word])
@@ -95,8 +98,13 @@ class LinearFunction(Function):
         :return: forward computation output of shape (batch_size, out_features)
         """
         ctx.save_for_backward(input, weight)
+        (batch_size, in_features) = input.shape
+        assert weight.shape[1] == in_features
+        (out_features, in_features) = weight.shape
+        assert bias.shape[0] == (out_features)
         output = (torch.matmul(input, torch.transpose(weight, 0, 1)) 
                                             + bias.reshape((1, weight.shape[0])))
+        assert output.shape == (batch_size, out_features)
         return output
     
     @staticmethod
@@ -113,9 +121,13 @@ class LinearFunction(Function):
             g_bias: partial derivative w.r.t Linear bias (Same shape as bias, remember that bias is 1-D!!!): shape (out_features)
         """
         input, weight = ctx.saved_tensors
+        (out_features, in_features) = weight.shape
         g_input = torch.matmul(grad_output, weight)
         g_weight = torch.matmul(torch.transpose(grad_output, 0, 1), input)
         g_bias = torch.sum(grad_output, dim=0)
+        assert g_input.shape == (1, in_features)
+        assert g_weight.shape == (out_features, in_features)
+        assert g_bias.shape[0] == (out_features)
 
         return g_input, g_weight, g_bias
     
@@ -132,6 +144,7 @@ class TanhFunction(Function):
         """
         output = (pow(math.e, 2*input) - 1)/(pow(math.e, 2*input) + 1)
         ctx.save_for_backward(output)
+        assert input.shape == output.shape
         return (pow(math.e, 2*input) - 1)/(pow(math.e, 2*input) + 1)
 
     
@@ -145,6 +158,7 @@ class TanhFunction(Function):
         :return: partial deriviative of loss w.r.t Tanh inputs: shape (batch_size, in_features)
         """
         output, = ctx.saved_tensors
+        assert grad_output.shape == torch.mul(grad_output, (1 - torch.mul(output,output))).shape
         return torch.mul(grad_output, (1 - torch.mul(output,output)))
 
 
@@ -207,6 +221,7 @@ class Linear(nn.Module):
 
         :param x: Input into the Linear layer, of shape (batch_size, in_features)
         """
+        x = torch.reshape(x, (1, self.in_features))
         return LinearFunction.apply(x, self.weight, self.bias)
 
 
@@ -285,10 +300,12 @@ class RNN(nn.Module):
         for batch in range(batch_size):
             for word in range(seq_length):
                 embedding = embeds[batch][word] #shape of embedding is (embedding_dim,)
-                combined = torch.cat((embedding, hidden), dim=1) #concatenate input embeddings and hidden
-                hidden = self.activationLayer(self.linear1(combined))
+                #embedding = torch.reshape(embedding, (1, self.embedding_dim))
+                combined = torch.cat((embedding, hidden), dim=0) #concatenate input embeddings and hidden
+                hidden = self.activationLayer(self.linear1(combined)) #[0] is added on cuz there were some shape issues
                 hidden_states.append(hidden)
-        return hidden
+                hidden = torch.squeeze(hidden)
+        return hidden_states
 
 
 class TaggingModel(nn.Module):
@@ -306,6 +323,8 @@ class TaggingModel(nn.Module):
         """
 
         super(TaggingModel, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.tagset_size = tagset_size
         self.embeddingLayer = nn.Embedding(vocab_size, embedding_dim)
         self.rnnLayer = RNN(embedding_dim, hidden_dim, activation)
         self.linear2 = Linear(hidden_dim, tagset_size)
@@ -320,11 +339,16 @@ class TaggingModel(nn.Module):
         tag_distributions = []
         (batch_size, seq_length) = sentences.shape
         for batch in range(batch_size):
-            embedded_sentence = self.embeddingLayer(sentences[batch])
-            hidden_states = self.rnnLayer(embedded_sentence)
-            tag_distribution = self.linear2(hidden_states)
-            tag_distributions.append(tag_distribution)
+            embedded_sentence = self.embeddingLayer(sentences[batch]) #shape is (seq_length, 50)
+            embedded_sentence = torch.reshape(embedded_sentence, (1, seq_length, self.embedding_dim)) #reshape to (1, seq_length, 50)
+            hidden_states = self.rnnLayer(embedded_sentence) #shape is 
+            hidden_states = torch.reshape(torch.vstack(hidden_states), (1, seq_length, self.embedding_dim))
+            tag_distributions = torch.zeros(1, seq_length, self.tagset_size)
+            for seq in range(seq_length):
+                tag_distribution = self.linear2(hidden_states[0][seq])
+                tag_distributions[0][seq] = tag_distribution[0]
         return tag_distributions
+        
 
     
 
@@ -342,8 +366,8 @@ def calc_metrics(true_list, pred_list, tags_dict):
         (optional) recall: float of the overall recall of the two lists
         f1_score: float of the overall f1 score of the two lists
     """
-    true_list_tags = [tags_dict[i] for i in true_list]
-    pred_list_tags = [tags_dict[i] for i in pred_list]
+    true_list_tags = [tags_dict[i.item()] for i in true_list]
+    pred_list_tags = [tags_dict[i.item()] for i in pred_list]
     precision, recall, f1_score = evaluate(true_list_tags, pred_list_tags)
     return precision, recall, f1_score
 
@@ -360,7 +384,11 @@ def train_one_epoch(model, dataloader, loss_fn, optimizer):
     for data in iter(dataloader):
         inputs, labels = data
         optimizer.zero_grad()
-        outputs = model(inputs)
+        #labels_tensor = torch.tensor(labels) #labels_tensor.shape is (1, 9)
+        outputs = model(inputs) #outputs is shape (1, 9, 9)
+        #outputs_tensor = torch.tensor(outputs)
+        outputs = outputs.squeeze(0) 
+        labels = labels.squeeze(0)
         loss = loss_fn(outputs, labels)
         loss.backward()
         optimizer.step()
@@ -389,14 +417,18 @@ def predict_and_evaluate(model, dataloader, tags_dict, loss_fn):
         for data in iter(dataloader):
             dataset_len += 1
             inputs, labels = data
+            local_preds = []
             outputs = model(inputs)
-            for i in range(len(outputs)):
-                all_preds.append(outputs[i])
-                if (outputs[i] == labels[i]):
+            outputs = outputs.squeeze(0) #remove first dimension (remove batch_size)
+            labels = labels.squeeze(0) #remove first dimension (remove batch_size)
+            for i in range(len(labels)):
+                all_preds.append(torch.argmax(outputs[i]))
+                local_preds.append(torch.argmax(outputs[i]))
+                if (torch.argmax(outputs[i]) == labels[i]):
                     num_correct += 1
             loss = loss_fn(outputs, labels)
             avg_loss += loss
-            (precision, recall, f1) = calc_metrics(labels, outputs, tags_dict)
+            (precision, recall, f1) = calc_metrics(labels, local_preds, tags_dict)
             avg_f1 += f1
     if (dataset_len != 0):
         avg_loss /= dataset_len
@@ -485,6 +517,9 @@ def main(train_input: str, test_input: str, embedding_dim: int,
     vocab_size = len(word_to_idx.keys())
     tagset_size = len(tag_to_idx.keys())
     model = TaggingModel(vocab_size, tagset_size, embedding_dim, hidden_dim, activation)
+    pdb.set_trace()
+    for param in model.parameters():
+        print(param.shape)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     loss_fn = torch.nn.CrossEntropyLoss()
 

@@ -59,7 +59,7 @@ class TestLinear(unittest.TestCase):
         # init the Linear layer arbitrarily, then fill in the weight matrix 
         # for the test case
         layer = Linear(1, 1, zero_init, 0.0)
-        layer.w = w
+        layer.weights = w
         a = layer.forward(X)
         assert_allclose(np.squeeze(a), soln)
 
@@ -81,7 +81,7 @@ class TestLinear(unittest.TestCase):
         T = data["linear_backward"]
         X, w, dxsoln, dwsoln = T[0][1:], T[1], T[2], T[3]
         layer = Linear(1, 1, zero_init, 0.0)
-        layer.w = w
+        layer.weights = w
         z = layer.forward(X)  # forward pass to ensure layer caches values
         dz = np.ones_like(z)  # use all 1's for gradient w.r.t output
         dx = layer.backward(dz)

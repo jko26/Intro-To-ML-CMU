@@ -1,4 +1,4 @@
-accuracy(train): 0
-accuracy(test): 0
-f1(train): 0
-f1(test): 0
+accuracy(train): 11.584582
+accuracy(test): 9.702703
+f1(train): 286.254971
+f1(test): 41.737446
